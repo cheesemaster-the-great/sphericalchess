@@ -3,164 +3,414 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebXR VR Experience</title>
+    <title>Interactive Earth Globe</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         body {
             margin: 0;
-            background-color: #000;
-            color: #fff;
-            font-family: Arial, sans-serif;
+            padding: 0;
+            background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
             overflow: hidden;
+            font-family: Arial, sans-serif;
         }
         
         canvas {
             display: block;
+            cursor: grab;
+        }
+        
+        canvas:active {
+            cursor: grabbing;
         }
         
         #info {
             position: absolute;
-            top: 10px;
-            left: 10px;
+            top: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
             z-index: 100;
-            background: rgba(0,0,0,0.8);
-            padding: 10px;
-            border-radius: 5px;
+            backdrop-filter: blur(10px);
         }
         
-        #enterVR {
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            z-index: 100;
+        }
+        
+        #vrButton {
             position: absolute;
             bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
+            right: 20px;
             padding: 12px 24px;
-            background: #007acc;
+            background: linear-gradient(45deg, #007acc, #0056b3);
             color: white;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 16px;
+            font-weight: bold;
             cursor: pointer;
             z-index: 100;
+            box-shadow: 0 4px 15px rgba(0, 122, 204, 0.3);
+            transition: all 0.3s ease;
         }
         
-        #enterVR:hover {
-            background: #005fa3;
+        #vrButton:hover {
+            background: linear-gradient(45deg, #0056b3, #004085);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 122, 204, 0.4);
         }
         
-        #enterVR:disabled {
+        #vrButton:disabled {
             background: #666;
             cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        #vrStatus {
+            position: absolute;
+            bottom: 80px;
+            right: 20px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 12px;
+            backdrop-filter: blur(10px);
         }
     </style>
 </head>
 <body>
-    <div id="info">
-        <div>WebXR VR Experience</div>
-        <div id="status">Checking VR support...</div>
-    </div>
+    <div id="loading">Loading Earth texture...</div>
     
-    <button id="enterVR" disabled>Enter VR</button>
+    <button id="vrButton" disabled>Enter VR</button>
+    <div id="vrStatus">Checking VR support...</div>
+    
+    <div id="info">
+        <div><strong>Interactive Earth VR</strong></div>
+        <div>🖱️ Desktop: Click and drag to rotate</div>
+        <div>🔍 Desktop: Scroll to zoom</div>
+        <div>📱 Mobile: Touch and drag</div>
+        <div>🥽 VR: Walk around the floating Earth!</div>
+        <div>🎯 VR: Point and click to rotate Earth</div>
+    </div>
 
     <script>
         let scene, camera, renderer;
-        let vrButton;
+        let earth, earthMesh;
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let rotationVelocity = { x: 0, y: 0 };
+        let autoRotate = true;
+        
+        // VR variables
+        let vrButton, vrStatus;
         let controller1, controller2;
-        let room;
-
-        // Initialize the scene
+        let raycaster;
+        let intersected = null;
+        let isVRMode = false;
+        
+        // Mouse/touch interaction variables
+        let mousePosition = { x: 0, y: 0 };
+        
         function init() {
             // Create scene
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x505050);
-
+            
             // Create camera
-            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 1.6, 3);
-
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 3;
+            
             // Create renderer
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.outputEncoding = THREE.sRGBEncoding;
-            renderer.shadowMap.enabled = true;
-            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
-
-            // Create a simple room
-            createRoom();
             
-            // Add some interactive cubes
-            createInteractiveCubes();
-
+            // Setup raycaster for VR interactions
+            raycaster = new THREE.Raycaster();
+            
+            // Create Earth
+            createEarth();
+            
             // Add lighting
             addLighting();
-
+            
+            // Add stars background
+            addStars();
+            
+            // Add VR environment
+            addVREnvironment();
+            
+            // Setup controls
+            setupControls();
+            
             // Setup VR
             setupVR();
-
-            // Start render loop
-            renderer.setAnimationLoop(render);
+            
+            // Start animation loop
+            renderer.setAnimationLoop(animate);
         }
-
-        function createRoom() {
-            const roomGeometry = new THREE.BoxGeometry(6, 6, 6, 10, 10, 10);
-            const roomMaterial = new THREE.MeshStandardMaterial({
-                color: 0x404040,
-                side: THREE.BackSide
+        
+        function createEarth() {
+            // Create sphere geometry
+            const geometry = new THREE.SphereGeometry(1, 64, 64);
+            
+            // Load Earth texture
+            const textureLoader = new THREE.TextureLoader();
+            
+            // Create a simple Earth-like texture using canvas if image fails to load
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            
+            // Create a gradient that looks like Earth
+            const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+            gradient.addColorStop(0, '#4a90e2');      // Ocean blue
+            gradient.addColorStop(0.3, '#2e7d32');    // Forest green
+            gradient.addColorStop(0.5, '#8bc34a');    // Light green
+            gradient.addColorStop(0.7, '#ffeb3b');    // Desert yellow
+            gradient.addColorStop(0.9, '#795548');    // Mountain brown
+            gradient.addColorStop(1, '#ffffff');      // Ice white
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Add some continent-like shapes
+            ctx.fillStyle = '#2e7d32';
+            
+            // Draw simplified continents
+            drawContinent(ctx, 200, 150, 300, 200); // Europe/Africa
+            drawContinent(ctx, 100, 300, 200, 150); // Americas
+            drawContinent(ctx, 600, 200, 250, 180); // Asia
+            drawContinent(ctx, 800, 350, 150, 100); // Australia
+            
+            // Add some random islands
+            for (let i = 0; i < 20; i++) {
+                const x = Math.random() * canvas.width;
+                const y = Math.random() * canvas.height;
+                const size = Math.random() * 20 + 5;
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            const canvasTexture = new THREE.CanvasTexture(canvas);
+            canvasTexture.wrapS = THREE.RepeatWrapping;
+            canvasTexture.wrapT = THREE.RepeatWrapping;
+            
+            // Try to load a real Earth texture, fallback to canvas texture
+            textureLoader.load(
+                'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg',
+                (texture) => {
+                    earthMesh.material.map = texture;
+                    earthMesh.material.needsUpdate = true;
+                    document.getElementById('loading').style.display = 'none';
+                },
+                undefined,
+                (error) => {
+                    // Fallback to canvas texture
+                    earthMesh.material.map = canvasTexture;
+                    earthMesh.material.needsUpdate = true;
+                    document.getElementById('loading').style.display = 'none';
+                }
+            );
+            
+            // Create material
+            const material = new THREE.MeshPhongMaterial({
+                map: canvasTexture,
+                shininess: 0.1,
+                transparent: false
             });
-            room = new THREE.Mesh(roomGeometry, roomMaterial);
-            scene.add(room);
-
-            // Add a floor with different material
-            const floorGeometry = new THREE.PlaneGeometry(6, 6);
-            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            
+            // Create mesh
+            earthMesh = new THREE.Mesh(geometry, material);
+            earthMesh.position.set(0, 1.6, 0); // Position at standing height
+            scene.add(earthMesh);
+            
+            // Hide loading text after a delay if texture doesn't load
+            setTimeout(() => {
+                document.getElementById('loading').style.display = 'none';
+            }, 3000);
+        }
+        
+        function drawContinent(ctx, x, y, width, height) {
+            ctx.beginPath();
+            ctx.ellipse(x, y, width/2, height/2, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Add some irregular edges
+            for (let i = 0; i < 5; i++) {
+                const offsetX = (Math.random() - 0.5) * width;
+                const offsetY = (Math.random() - 0.5) * height;
+                const size = Math.random() * 50 + 20;
+                ctx.beginPath();
+                ctx.arc(x + offsetX, y + offsetY, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        function addLighting() {
+            // Ambient light
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+            scene.add(ambientLight);
+            
+            // Directional light (sun)
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(5, 3, 5);
+            scene.add(directionalLight);
+            
+            // Add a subtle rim light
+            const rimLight = new THREE.DirectionalLight(0x4a90e2, 0.3);
+            rimLight.position.set(-5, 0, -5);
+            scene.add(rimLight);
+        }
+        
+        function addStars() {
+            const starsGeometry = new THREE.BufferGeometry();
+            const starsMaterial = new THREE.PointsMaterial({ 
+                color: 0xffffff, 
+                size: 2,
+                sizeAttenuation: false
+            });
+            
+            const starsVertices = [];
+            for (let i = 0; i < 10000; i++) {
+                const x = (Math.random() - 0.5) * 2000;
+                const y = (Math.random() - 0.5) * 2000;
+                const z = (Math.random() - 0.5) * 2000;
+                starsVertices.push(x, y, z);
+            }
+            
+            starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+            const stars = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(stars);
+        }
+        
+        function addVREnvironment() {
+            // Add a subtle floor grid for VR spatial reference
+            const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
+            gridHelper.position.y = 0;
+            scene.add(gridHelper);
+            
+            // Add invisible floor for teleportation/movement reference
+            const floorGeometry = new THREE.PlaneGeometry(20, 20);
+            const floorMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0x333333, 
+                transparent: true, 
+                opacity: 0.1,
+                side: THREE.DoubleSide
+            });
             const floor = new THREE.Mesh(floorGeometry, floorMaterial);
             floor.rotation.x = -Math.PI / 2;
-            floor.position.y = -3;
-            floor.receiveShadow = true;
+            floor.position.y = 0;
             scene.add(floor);
-        }
-
-        function createInteractiveCubes() {
-            const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
             
-            for (let i = 0; i < 5; i++) {
-                const material = new THREE.MeshStandardMaterial({
-                    color: Math.random() * 0xffffff
-                });
-                const cube = new THREE.Mesh(geometry, material);
+            // Add some reference objects around the Earth
+            addReferenceObjects();
+        }
+        
+        function addReferenceObjects() {
+            // Add some floating reference cubes around the Earth
+            const cubeGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            const materials = [
+                new THREE.MeshStandardMaterial({ color: 0xff6b6b }),
+                new THREE.MeshStandardMaterial({ color: 0x4ecdc4 }),
+                new THREE.MeshStandardMaterial({ color: 0x45b7d1 }),
+                new THREE.MeshStandardMaterial({ color: 0xf9ca24 }),
+                new THREE.MeshStandardMaterial({ color: 0x6c5ce7 }),
+                new THREE.MeshStandardMaterial({ color: 0xa55eea })
+            ];
+            
+            for (let i = 0; i < 6; i++) {
+                const cube = new THREE.Mesh(cubeGeometry, materials[i]);
+                const angle = (i / 6) * Math.PI * 2;
+                const radius = 3;
                 cube.position.set(
-                    (Math.random() - 0.5) * 4,
-                    Math.random() * 2 + 0.5,
-                    (Math.random() - 0.5) * 4
+                    Math.cos(angle) * radius,
+                    1.6 + Math.sin(i) * 0.5,
+                    Math.sin(angle) * radius
                 );
-                cube.castShadow = true;
-                cube.userData.velocity = new THREE.Vector3(
-                    (Math.random() - 0.5) * 0.01,
-                    0,
-                    (Math.random() - 0.5) * 0.01
-                );
+                cube.userData.originalPosition = cube.position.clone();
+                cube.userData.floatOffset = i * 0.5;
                 scene.add(cube);
             }
         }
-
-        function addLighting() {
-            // Ambient light
-            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
-            scene.add(ambientLight);
-
-            // Directional light
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            directionalLight.position.set(1, 1, 1);
-            directionalLight.castShadow = true;
-            directionalLight.shadow.mapSize.width = 1024;
-            directionalLight.shadow.mapSize.height = 1024;
-            scene.add(directionalLight);
+        
+        function setupControls() {
+            const canvas = renderer.domElement;
+            
+            // Mouse events
+            canvas.addEventListener('mousedown', onMouseDown);
+            canvas.addEventListener('mousemove', onMouseMove);
+            canvas.addEventListener('mouseup', onMouseUp);
+            canvas.addEventListener('wheel', onWheel);
+            
+            // Touch events for mobile
+            canvas.addEventListener('touchstart', onTouchStart);
+            canvas.addEventListener('touchmove', onTouchMove);
+            canvas.addEventListener('touchend', onTouchEnd);
+            
+            // Prevent context menu
+            canvas.addEventListener('contextmenu', (e) => e.preventDefault());
         }
-
+        
+        function onMouseDown(event) {
+            isDragging = true;
+            autoRotate = false;
+            previousMousePosition = {
+                x: event.clientX,
+                y: event.clientY
+            };
+        }
+        
+        function onMouseMove(event) {
+            if (isDragging) {
+                const deltaMove = {
+                    x: event.clientX - previousMousePosition.x,
+                    y: event.clientY - previousMousePosition.y
+                };
+                
+                rotationVelocity.y = deltaMove.x * 0.01;
+                rotationVelocity.x = deltaMove.y * 0.01;
+                
+                earthMesh.rotation.y += rotationVelocity.y;
+                earthMesh.rotation.x += rotationVelocity.x;
+                
+                // Clamp X rotation to prevent flipping
+                earthMesh.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, earthMesh.rotation.x));
+                
+                previousMousePosition = {
+                    x: event.clientX,
+                    y: event.clientY
+                };
+            }
+        }
+        
+        function onMouseUp() {
+            isDragging = false;
+            // Resume auto-rotation after a delay
+            setTimeout(() => {
+                if (!isDragging) {
+                    autoRotate = true;
+                }
+            }, 2000);
+        }
+        
         function setupVR() {
-            vrButton = document.getElementById('enterVR');
+            vrButton = document.getElementById('vrButton');
+            vrStatus = document.getElementById('vrStatus');
             
             // Check if WebXR is supported
             if ('xr' in navigator) {
@@ -168,43 +418,71 @@
                     if (supported) {
                         vrButton.disabled = false;
                         vrButton.textContent = 'Enter VR';
-                        document.getElementById('status').textContent = 'VR Ready!';
+                        vrStatus.textContent = 'VR Ready! 🥽';
                     } else {
-                        document.getElementById('status').textContent = 'VR not supported';
+                        vrStatus.textContent = 'VR not supported - try WebXR emulator';
                     }
                 });
             } else {
-                document.getElementById('status').textContent = 'WebXR not available';
+                vrStatus.textContent = 'WebXR not available - try WebXR emulator';
             }
 
-            vrButton.addEventListener('click', () => {
+            vrButton.addEventListener('click', async () => {
                 if (renderer.xr.isPresenting) {
                     renderer.xr.getSession().end();
                 } else {
-                    // Request VR session
-                    navigator.xr.requestSession('immersive-vr').then((session) => {
-                        renderer.xr.setSession(session);
+                    try {
+                        // Request VR session with proper options
+                        const session = await navigator.xr.requestSession('immersive-vr', {
+                            optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+                        });
+                        
+                        // Set reference space explicitly
+                        renderer.xr.setReferenceSpaceType('local-floor');
+                        
+                        // Try to set the session, fallback if local-floor not supported
+                        try {
+                            await renderer.xr.setSession(session);
+                        } catch (error) {
+                            console.warn('local-floor not supported, falling back to local');
+                            renderer.xr.setReferenceSpaceType('local');
+                            await renderer.xr.setSession(session);
+                        }
+                        
                         vrButton.textContent = 'Exit VR';
+                        vrStatus.textContent = 'In VR Mode - Walk around! 🚶‍♂️';
+                        isVRMode = true;
+                        
+                        // Stop auto-rotation in VR mode
+                        autoRotate = false;
                         
                         session.addEventListener('end', () => {
                             vrButton.textContent = 'Enter VR';
+                            vrStatus.textContent = 'VR Ready! 🥽';
+                            isVRMode = false;
+                            // Resume auto-rotation for desktop
+                            autoRotate = true;
                         });
-                    });
+                        
+                    } catch (error) {
+                        console.error('Failed to start VR session:', error);
+                        vrStatus.textContent = 'Failed to start VR: ' + error.message;
+                    }
                 }
             });
 
-            // Setup controllers
+            // Setup VR controllers
             controller1 = renderer.xr.getController(0);
-            controller1.addEventListener('selectstart', onSelectStart);
-            controller1.addEventListener('selectend', onSelectEnd);
+            controller1.addEventListener('selectstart', onControllerSelectStart);
+            controller1.addEventListener('selectend', onControllerSelectEnd);
             scene.add(controller1);
 
             controller2 = renderer.xr.getController(1);
-            controller2.addEventListener('selectstart', onSelectStart);
-            controller2.addEventListener('selectend', onSelectEnd);
+            controller2.addEventListener('selectstart', onControllerSelectStart);
+            controller2.addEventListener('selectend', onControllerSelectEnd);
             scene.add(controller2);
 
-            // Add controller models (simple line for now)
+            // Add controller models (simple rays)
             const geometry = new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(0, 0, 0),
                 new THREE.Vector3(0, 0, -1)
@@ -212,80 +490,154 @@
             const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x00ff00 }));
             line.name = 'line';
             line.scale.z = 5;
-            controller1.add(line.clone());
-            controller2.add(line.clone());
-        }
-
-        function onSelectStart(event) {
-            const controller = event.target;
             
-            // Simple interaction - change controller line color
+            const line1 = line.clone();
+            const line2 = line.clone();
+            controller1.add(line1);
+            controller2.add(line2);
+        }
+        
+        function onControllerSelectStart(event) {
+            const controller = event.target;
             const line = controller.getObjectByName('line');
             if (line) line.material.color.setHex(0xff0000);
-        }
-
-        function onSelectEnd(event) {
-            const controller = event.target;
             
-            // Reset controller line color
+            // Check if pointing at Earth
+            const tempMatrix = new THREE.Matrix4();
+            tempMatrix.identity().extractRotation(controller.matrixWorld);
+            
+            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+            
+            const intersects = raycaster.intersectObject(earthMesh);
+            if (intersects.length > 0) {
+                intersected = intersects[0].object;
+                controller.userData.isRotating = true;
+                controller.userData.lastRotation = controller.rotation.y;
+            }
+        }
+        
+        function onControllerSelectEnd(event) {
+            const controller = event.target;
             const line = controller.getObjectByName('line');
             if (line) line.material.color.setHex(0x00ff00);
+            
+            controller.userData.isRotating = false;
+            intersected = null;
         }
-
-        function render() {
-            // Animate cubes
-            scene.children.forEach(child => {
-                if (child.geometry && child.geometry.type === 'BoxGeometry' && child.userData.velocity) {
-                    child.position.add(child.userData.velocity);
-                    child.rotation.x += 0.01;
-                    child.rotation.y += 0.01;
+        
+        function handleVRInteraction() {
+            if (!renderer.xr.isPresenting) return;
+            
+            // Handle controller-based Earth rotation
+            [controller1, controller2].forEach(controller => {
+                if (controller && controller.userData.isRotating) {
+                    const currentRotation = controller.rotation.y;
+                    const rotationDelta = currentRotation - (controller.userData.lastRotation || currentRotation);
                     
-                    // Bounce off walls
-                    if (Math.abs(child.position.x) > 2.8) {
-                        child.userData.velocity.x *= -1;
-                    }
-                    if (Math.abs(child.position.z) > 2.8) {
-                        child.userData.velocity.z *= -1;
-                    }
+                    // Rotate Earth based on controller rotation
+                    earthMesh.rotation.y += rotationDelta * 2;
+                    controller.userData.lastRotation = currentRotation;
                 }
             });
-
+            
+            // Animate reference cubes
+            scene.children.forEach(child => {
+                if (child.userData && child.userData.originalPosition) {
+                    const time = Date.now() * 0.001;
+                    child.position.y = child.userData.originalPosition.y + 
+                                     Math.sin(time + child.userData.floatOffset) * 0.1;
+                    child.rotation.x += 0.01;
+                    child.rotation.y += 0.01;
+                }
+            });
+        }
+        
+        function onWheel(event) {
+            const zoomSpeed = 0.1;
+            const minDistance = 1.5;
+            const maxDistance = 10;
+            
+            camera.position.z += event.deltaY * zoomSpeed * 0.01;
+            camera.position.z = Math.max(minDistance, Math.min(maxDistance, camera.position.z));
+        }
+        
+        // Touch events
+        function onTouchStart(event) {
+            if (event.touches.length === 1) {
+                isDragging = true;
+                autoRotate = false;
+                previousMousePosition = {
+                    x: event.touches[0].clientX,
+                    y: event.touches[0].clientY
+                };
+            }
+        }
+        
+        function onTouchMove(event) {
+            if (event.touches.length === 1 && isDragging) {
+                event.preventDefault();
+                
+                const deltaMove = {
+                    x: event.touches[0].clientX - previousMousePosition.x,
+                    y: event.touches[0].clientY - previousMousePosition.y
+                };
+                
+                rotationVelocity.y = deltaMove.x * 0.01;
+                rotationVelocity.x = deltaMove.y * 0.01;
+                
+                earthMesh.rotation.y += rotationVelocity.y;
+                earthMesh.rotation.x += rotationVelocity.x;
+                
+                earthMesh.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, earthMesh.rotation.x));
+                
+                previousMousePosition = {
+                    x: event.touches[0].clientX,
+                    y: event.touches[0].clientY
+                };
+            }
+        }
+        
+        function onTouchEnd() {
+            isDragging = false;
+            setTimeout(() => {
+                if (!isDragging) {
+                    autoRotate = true;
+                }
+            }, 2000);
+        }
+        
+        function animate() {
+            // Handle VR interactions
+            handleVRInteraction();
+            
+            // Auto-rotation only in desktop mode
+            if (autoRotate && !isDragging && !isVRMode) {
+                earthMesh.rotation.y += 0.005;
+            }
+            
+            // Apply momentum/damping to rotation (desktop only)
+            if (!isDragging && !isVRMode) {
+                rotationVelocity.x *= 0.95;
+                rotationVelocity.y *= 0.95;
+            }
+            
+            // Gentle floating animation only in desktop mode
+            if (!isVRMode) {
+                earthMesh.position.y = 1.6 + Math.sin(Date.now() * 0.001) * 0.05;
+            }
+            
             renderer.render(scene, camera);
         }
-
+        
         // Handle window resize
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
-
-        // Basic mouse controls for desktop testing
-        let mouseX = 0, mouseY = 0;
-        document.addEventListener('mousemove', (event) => {
-            mouseX = (event.clientX / window.innerWidth) * 2 - 1;
-            mouseY = -(event.clientY / window.innerHeight) * 2 + 1;
-            
-            // Rotate camera slightly based on mouse for desktop preview
-            if (!renderer.xr.isPresenting) {
-                camera.rotation.y = mouseX * 0.3;
-                camera.rotation.x = mouseY * 0.2;
-            }
-        });
-
-        // Click to simulate controller trigger
-        document.addEventListener('click', () => {
-            if (!renderer.xr.isPresenting) {
-                // Simulate controller interaction for desktop
-                scene.children.forEach(child => {
-                    if (child.geometry && child.geometry.type === 'BoxGeometry') {
-                        child.material.color.setHex(Math.random() * 0xffffff);
-                    }
-                });
-            }
-        });
-
-        // Initialize when page loads
+        
+        // Initialize
         init();
     </script>
 </body>
