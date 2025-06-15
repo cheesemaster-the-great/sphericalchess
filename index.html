@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Earth Globe</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="loading">Loading Earth texture...</div>
+    
+    <button id="vrButton" disabled>Enter VR</button>
+    <div id="vrStatus">Checking VR support...</div>
+    
+    <div id="info">
+        <div><strong>Interactive Earth VR</strong></div>
+        <div>🖱️ Desktop: Click and drag to rotate</div>
+        <div>🔍 Desktop: Scroll to zoom</div>
+        <div>📱 Mobile: Touch and drag</div>
+        <div>🥽 VR: Walk around the floating Earth!</div>
+        <div>🎯 VR: Point and click to rotate Earth</div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
